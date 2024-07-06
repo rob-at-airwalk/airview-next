@@ -1,14 +1,25 @@
 /* eslint-disable react/no-unstable-nested-components */
-import '@mdxeditor/editor/style.css';
+import '@webtech0321/mdx-editor-collab/style.css';
 
+import SaveIcon from '@mui/icons-material/Save';
+import { Alert, css, Fab } from '@mui/material';
+import CircularProgress from '@mui/material/CircularProgress';
+import Paper from '@mui/material/Paper';
+import Snackbar from '@mui/material/Snackbar';
+import type { Theme } from '@mui/material/styles';
+import { styled } from '@mui/material/styles';
 import {
+  activeEditor$,
+  addComposerChild$,
   BlockTypeSelect,
   BoldItalicUnderlineToggles,
+  CodeBlockNode,
   codeBlockPlugin,
   CodeMirrorEditor,
   CreateLink,
   diffSourcePlugin,
   DiffSourceToggleWrapper,
+  DirectiveNode,
   frontmatterPlugin,
   headingsPlugin,
   imagePlugin,
@@ -24,18 +35,23 @@ import {
   MDXEditor,
   type MDXEditorMethods,
   quotePlugin,
+  realmPlugin,
+  rootEditor$,
+  TableNode,
   tablePlugin,
   thematicBreakPlugin,
   toolbarPlugin,
   UndoRedo,
-} from '@mdxeditor/editor';
-import SaveIcon from '@mui/icons-material/Save';
-import { Alert, css, Fab } from '@mui/material';
-import CircularProgress from '@mui/material/CircularProgress';
-import Paper from '@mui/material/Paper';
-import Snackbar from '@mui/material/Snackbar';
-import type { Theme } from '@mui/material/styles';
-import { styled } from '@mui/material/styles';
+  usedLexicalNodes$,
+} from '@webtech0321/mdx-editor-collab';
+import type { LexicalEditor } from 'lexical';
+import {
+  $createParagraphNode,
+  $createTextNode,
+  $getRoot,
+  createEditor,
+} from 'lexical';
+import dynamic from 'next/dynamic';
 import React, {
   useCallback,
   useEffect,
@@ -43,9 +59,21 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { WebsocketProvider } from 'y-websocket';
+import * as Y from 'yjs';
 
 import type { ContentItem } from '@/lib/Types';
 import { baseTheme } from '@/styles/baseTheme';
+
+const CollaborationPlugin = dynamic(
+  () =>
+    import('@lexical/react/LexicalCollaborationPlugin').then(
+      (mod) => mod.CollaborationPlugin
+    ),
+  {
+    ssr: false,
+  }
+);
 
 const toKebabCase = (str: string) => {
   return str.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
@@ -80,6 +108,7 @@ interface EditorProps {
   enabled?: boolean;
   top: number;
   editorRef?: React.MutableRefObject<MDXEditorMethods | null>;
+  colabID: string;
 }
 
 const Editor = React.memo(function EditorC({
@@ -92,6 +121,7 @@ const Editor = React.memo(function EditorC({
   enabled = true,
   top,
   editorRef,
+  colabID,
 }: EditorProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -99,7 +129,7 @@ const Editor = React.memo(function EditorC({
   const changedRef = useRef(false);
   const typographyCopy = { ...baseTheme.typography } as Theme['typography'];
   const importedCss = convertStyleObjectToCSS(typographyCopy);
-
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const StyledMDXEditor = styled(MDXEditor)`
     font-family: 'Heebo';
     font-weight: 200;
@@ -108,8 +138,6 @@ const Editor = React.memo(function EditorC({
     }
     [class*='_contentEditable_'] {
       height: calc(100vh - ${top}px);
-      padding-left: 2% !important;
-      padding-right: 2% !important;
       overflow-y: auto;
       overflow-x: hidden;
     }
@@ -146,7 +174,7 @@ const Editor = React.memo(function EditorC({
       }
     }
     img {
-      max-width: 70%;
+      max-width: 50%;
       height: auto;
     }
   `;
@@ -171,6 +199,79 @@ const Editor = React.memo(function EditorC({
       }
     },
     [initialMarkdown, defaultContext, context.branch]
+  );
+
+  const initialEditorState = (_editor: LexicalEditor): void => {
+    const root = $getRoot();
+    const paragraph = $createParagraphNode();
+    const text = $createTextNode();
+    paragraph.append(text);
+    root.append(paragraph);
+  };
+
+  const collaborationPlugin = useMemo(
+    () =>
+      realmPlugin({
+        postInit(realm) {
+          // const rootEditor = realm.getValue(rootEditor$);
+          const newEditor = createEditor({
+            editable: true,
+            namespace: 'MDXEditor',
+            nodes: realm.getValue(usedLexicalNodes$),
+            onError: (err: any) => {
+              throw err;
+            },
+            // theme: rootEditor?._config.theme,
+          });
+          realm.pub(rootEditor$, newEditor);
+          realm.pub(activeEditor$, newEditor);
+
+          const excludedProperties = new Map();
+          excludedProperties.set(TableNode, new Set(['focusEmitter']));
+          excludedProperties.set(
+            CodeBlockNode,
+            new Set([
+              '__focusEmitter',
+              'setCode',
+              'setMeta',
+              'setLanguage',
+              'select',
+            ])
+          );
+          excludedProperties.set(DirectiveNode, new Set(['__focusEmitter']));
+
+          realm.pub(addComposerChild$, () => (
+            <CollaborationPlugin
+              id={colabID}
+              // @ts-ignore
+              providerFactory={(id, yjsDocMap) => {
+                const protocol =
+                  window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                let doc = yjsDocMap.get(id);
+                if (doc === undefined) {
+                  doc = new Y.Doc();
+                  yjsDocMap.set(id, doc);
+                } else {
+                  doc.load();
+                }
+                const provider = new WebsocketProvider(
+                  `${protocol}//${window.location.host}`,
+                  id,
+                  doc
+                );
+
+                return provider;
+              }}
+              initialEditorState={initialEditorState}
+              shouldBootstrap={false}
+              excludedProperties={excludedProperties}
+              username={`ABC-${Math.floor(Math.random() * 100)}`}
+              cursorsContainerRef={containerRef}
+            />
+          ));
+        },
+      }),
+    [colabID]
   );
 
   const editorPlugins = useMemo(
@@ -224,8 +325,14 @@ const Editor = React.memo(function EditorC({
           </>
         ),
       }),
+      collaborationPlugin(),
     ],
-    [initialMarkdown, imageUploadHandler, imagePreviewHandler]
+    [
+      initialMarkdown,
+      imageUploadHandler,
+      imagePreviewHandler,
+      collaborationPlugin,
+    ]
   );
 
   const SaveButton = React.memo(function SaveButton() {
@@ -268,10 +375,10 @@ const Editor = React.memo(function EditorC({
   return (
     <Paper
       sx={{
-        px: 0,
+        px: '1%',
         maxHeight: 'calc(100vh - 65px)',
-        pt: 0,
-        pb: 0,
+        pt: '2%',
+        pb: '2%',
         overflow: 'auto',
       }}
       elevation={0}
@@ -281,15 +388,17 @@ const Editor = React.memo(function EditorC({
           The editor is in read-only mode until you change branch
         </Alert>
       )}
-      <StyledMDXEditor
-        ref={editorRef}
-        onChange={editorCallback}
-        onError={(msg) => setError(`Error in markdown: ${msg}`)}
-        markdown={initialMarkdown || ''}
-        plugins={editorPlugins}
-        readOnly={defaultContext && context.branch === defaultContext.branch}
-        autoFocus
-      />
+      <div ref={containerRef}>
+        <StyledMDXEditor
+          ref={editorRef}
+          onChange={editorCallback}
+          onError={(msg) => setError(`Error in markdown: ${msg}`)}
+          markdown={initialMarkdown || ''}
+          plugins={editorPlugins}
+          readOnly={defaultContext && context.branch === defaultContext.branch}
+          autoFocus
+        />
+      </div>
       <SaveButton />
       <Snackbar
         open={!!error}
