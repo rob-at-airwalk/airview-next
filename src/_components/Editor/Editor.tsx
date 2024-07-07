@@ -44,13 +44,7 @@ import {
   UndoRedo,
   usedLexicalNodes$,
 } from '@webtech0321/mdx-editor-collab';
-import type { LexicalEditor } from 'lexical';
-import {
-  $createParagraphNode,
-  $createTextNode,
-  $getRoot,
-  createEditor,
-} from 'lexical';
+import { createEditor } from 'lexical';
 import dynamic from 'next/dynamic';
 import React, {
   useCallback,
@@ -62,8 +56,12 @@ import React, {
 import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
 
+import { getLogger } from '@/lib/Logger';
 import type { ContentItem } from '@/lib/Types';
 import { baseTheme } from '@/styles/baseTheme';
+
+const logger = getLogger().child({ namespace: 'Editor' });
+logger.level = 'info';
 
 const CollaborationPlugin = dynamic(
   () =>
@@ -123,10 +121,11 @@ const Editor = React.memo(function EditorC({
   editorRef,
   colabID,
 }: EditorProps) {
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
+  // const [error, setError] = useState('');
+  // const [success, setSuccess] = useState(false);
   const changedRef = useRef(false);
+  const errorRef = useRef('');
+  // const successRef = useRef(false);
   const typographyCopy = { ...baseTheme.typography } as Theme['typography'];
   const importedCss = convertStyleObjectToCSS(typographyCopy);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -201,13 +200,13 @@ const Editor = React.memo(function EditorC({
     [initialMarkdown, defaultContext, context.branch]
   );
 
-  const initialEditorState = (_editor: LexicalEditor): void => {
-    const root = $getRoot();
-    const paragraph = $createParagraphNode();
-    const text = $createTextNode();
-    paragraph.append(text);
-    root.append(paragraph);
-  };
+  // const initialEditorState = (_editor: LexicalEditor): void => {
+  //   const root = $getRoot();
+  //   const paragraph = $createParagraphNode();
+  //   const text = $createTextNode();
+  //   paragraph.append(text);
+  //   root.append(paragraph);
+  // };
 
   const collaborationPlugin = useMemo(
     () =>
@@ -248,7 +247,7 @@ const Editor = React.memo(function EditorC({
                 const protocol =
                   window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 let doc = yjsDocMap.get(id);
-                if (doc === undefined) {
+                if (!doc) {
                   doc = new Y.Doc();
                   yjsDocMap.set(id, doc);
                 } else {
@@ -260,9 +259,51 @@ const Editor = React.memo(function EditorC({
                   doc
                 );
 
+                // provider.on('status', (event: { status: string }) => {
+                //   if (event.status === 'connected') {
+                //     const meta = doc.getMap('meta');
+                //     if (isNewDocument || !meta.has('initialized')) {
+                //       logger.info('NOT initialized');
+                //     } else {
+                //       logger.info('initialized');
+                //     }
+                //   }
+                // });
+
+                provider.on('synced', () => {
+                  // The 'synced' event ensures all data has been loaded
+                  // initializeDocument(doc, initialMarkdown, editorRef);
+                  const meta = doc.getMap('metadata');
+
+                  // Check if the document has been initialized
+                  if (!meta.get('initialized')) {
+                    // Set the document as initialized
+                    meta.set('initialized', true);
+                    logger.info('Not initialised');
+
+                    // This is truly a new document, so we set the initial markdown
+                    if (editorRef && editorRef.current) {
+                      editorRef.current.setMarkdown(initialMarkdown);
+                      logger.info('setting initial content');
+                    }
+                  } else {
+                    logger.info('initialised');
+                  }
+                });
+
                 return provider;
               }}
-              initialEditorState={initialEditorState}
+              // initialEditorState={(editor: LexicalEditor) => {
+              //   editor.update(() => {
+              //     const root = $getRoot();
+              //     root.clear(); // Clear existing nodes
+              //     if (initialMarkdown) {
+              //       // Here we assume you have a function `insertMarkdown` available
+              //       // If Lexical supports markdown parsing, you could use that directly
+              //       // editorRef?.current?.insertMarkdown(initialMarkdown);
+              //     }
+              //   });
+              // }}
               shouldBootstrap={false}
               excludedProperties={excludedProperties}
               username={`ABC-${Math.floor(Math.random() * 100)}`}
@@ -271,7 +312,7 @@ const Editor = React.memo(function EditorC({
           ));
         },
       }),
-    [colabID]
+    [colabID, initialMarkdown, editorRef]
   );
 
   const editorPlugins = useMemo(
@@ -335,11 +376,43 @@ const Editor = React.memo(function EditorC({
     ]
   );
 
+  const Messages = React.memo(function Messages() {
+    const [error, setError] = useState('');
+    // const [success, setSuccess] = useState(false);
+    useEffect(() => {
+      const interval = setInterval(() => {
+        setError(errorRef.current);
+      }, 100);
+      return () => clearInterval(interval);
+    }, []);
+
+    return (
+      <Snackbar
+        open={!!error}
+        autoHideDuration={5000}
+        onClose={() => {
+          errorRef.current = '';
+        }}
+      >
+        <Alert
+          onClose={() => {
+            errorRef.current = '';
+          }}
+          severity='error'
+          sx={{ width: '100%' }}
+        >
+          {error}
+        </Alert>
+      </Snackbar>
+    );
+  });
+
   const SaveButton = React.memo(function SaveButton() {
     const [changed, setChanged] = useState(
       defaultContext && context.branch !== defaultContext.branch
     );
-
+    const [success, setSuccess] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
     useEffect(() => {
       const interval = setInterval(() => {
         setChanged(changedRef.current);
@@ -348,27 +421,42 @@ const Editor = React.memo(function EditorC({
     }, []);
 
     return (
-      <Fab
-        color='primary'
-        aria-label='save'
-        disabled={!enabled || isLoading || !changed}
-        style={{ position: 'fixed', bottom: 16, right: 16 }}
-        onClick={async () => {
-          setIsLoading(true);
-          setError('');
-          try {
-            const text = editorRef?.current?.getMarkdown() ?? 'error';
-            await editorSaveHandler(text ?? '');
-            setSuccess(true);
-          } catch (err: any) {
-            setError(err.message);
-          } finally {
-            setIsLoading(false);
-          }
-        }}
-      >
-        {isLoading ? <CircularProgress size={24} /> : <SaveIcon />}
-      </Fab>
+      <>
+        <Fab
+          color='primary'
+          aria-label='save'
+          disabled={!enabled || isLoading || !changed}
+          style={{ position: 'fixed', bottom: 16, right: 16 }}
+          onClick={async () => {
+            setIsLoading(true);
+            errorRef.current = '';
+            try {
+              const text = editorRef?.current?.getMarkdown() ?? 'error';
+              await editorSaveHandler(text ?? '');
+              setSuccess(true);
+            } catch (err: any) {
+              errorRef.current = err.message;
+            } finally {
+              setIsLoading(false);
+            }
+          }}
+        >
+          {isLoading ? <CircularProgress size={24} /> : <SaveIcon />}
+        </Fab>
+        <Snackbar
+          open={success}
+          autoHideDuration={5000}
+          onClose={() => setSuccess(false)}
+        >
+          <Alert
+            onClose={() => setSuccess(false)}
+            severity='info'
+            sx={{ width: '100%' }}
+          >
+            Saved file
+          </Alert>
+        </Snackbar>
+      </>
     );
   });
 
@@ -392,7 +480,9 @@ const Editor = React.memo(function EditorC({
         <StyledMDXEditor
           ref={editorRef}
           onChange={editorCallback}
-          onError={(msg) => setError(`Error in markdown: ${msg}`)}
+          onError={(msg) => {
+            errorRef.current = msg.error.toString();
+          }}
           markdown={initialMarkdown || ''}
           plugins={editorPlugins}
           readOnly={defaultContext && context.branch === defaultContext.branch}
@@ -400,32 +490,7 @@ const Editor = React.memo(function EditorC({
         />
       </div>
       <SaveButton />
-      <Snackbar
-        open={!!error}
-        autoHideDuration={5000}
-        onClose={() => setError('')}
-      >
-        <Alert
-          onClose={() => setError('')}
-          severity='error'
-          sx={{ width: '100%' }}
-        >
-          {error}
-        </Alert>
-      </Snackbar>
-      <Snackbar
-        open={success}
-        autoHideDuration={5000}
-        onClose={() => setSuccess(false)}
-      >
-        <Alert
-          onClose={() => setSuccess(false)}
-          severity='info'
-          sx={{ width: '100%' }}
-        >
-          Saved file
-        </Alert>
-      </Snackbar>
+      <Messages />
     </Paper>
   );
 });

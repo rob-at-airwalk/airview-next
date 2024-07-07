@@ -53,7 +53,7 @@ export default function EditorWrapper({
       logger.info('fetchData', response);
       setMdx(mdxResponse);
       // setColabID(`${context.branch}/${context.file}/${contentSha}`);
-      setColabID(`${context.branch}|${context.file?.replace('/', '-')}`);
+      setColabID(`${context.branch}|${context.file?.replace(/\//g, '-')}`);
     };
 
     fetchData();
