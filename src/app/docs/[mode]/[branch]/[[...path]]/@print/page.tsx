@@ -103,21 +103,23 @@ export default async function Page({
     if (file.endsWith('.md') || file.endsWith('.mdx')) {
       // const contentKey = params.path[0] as keyof typeof siteConfig.content;
       // const contentConfig = siteConfig?.content?.[contentKey];
+      const isGithubRepo =
+        contentConfig.owner &&
+        contentConfig.repo &&
+        contentConfig.branch &&
+        file;
 
-      if (
-        contentConfig?.owner &&
-        contentConfig?.repo &&
-        contentConfig?.branch &&
-        file
-      ) {
+      if (isGithubRepo) {
         const { owner, repo, branch } = contentConfig;
         pageContent = await getFileContent({ owner, repo, path: file, branch });
         if (pageContent && pageContent.content) {
           pageContentText = pageContent?.content
             ? Buffer.from(pageContent.content).toString()
             : '';
+        } else {
+          return notFound();
         }
-
+        
         const { content: linkedPageContentText, context } =
           await checkFrontmatter(pageContentText || '', contentConfig); // check for frontmatter context
         pageContentText = linkedPageContentText;
