@@ -350,7 +350,6 @@ const Editor = React.memo(function EditorC({
       toolbarPlugin({
         toolbarContents: () => (
           <>
-            {' '}
             <UndoRedo />
             <BlockTypeSelect />
             <BoldItalicUnderlineToggles />
@@ -467,7 +466,7 @@ const Editor = React.memo(function EditorC({
         maxHeight: 'calc(100vh - 65px)',
         pt: '2%',
         pb: '2%',
-        overflow: 'auto',
+        overflow: 'hidden',
       }}
       elevation={0}
     >
